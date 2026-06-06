@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gamehub-manager"
+version = "0.1.0"
+description = "Windows-first external drive game library manager."
+readme = "PRD.txt"
+requires-python = ">=3.11"
+dependencies = [
+  "PySide6>=6.7",
+  "psutil>=5.9",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["gamehub_manager*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

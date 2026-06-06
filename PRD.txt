@@ -1,0 +1,1632 @@
+# PRD — GameHubDrive Manager v1.0
+
+This PRD proceeds from your answered Step 0 and Step 0b inputs and follows the staged consulting workflow from the uploaded instruction document. 
+
+---
+
+## Step 1 — Challenge and simulate
+
+### Simulated roles
+
+1. **Windows desktop application architect**
+   Focus: PySide6 architecture, Windows drive detection, packaging, local config, installer reliability.
+
+2. **Game library/data model engineer**
+   Focus: manifests, SQLite schema, duplicate handling, folder conventions, installed-vs-drive state.
+
+3. **File operations and reliability engineer**
+   Focus: background copy jobs, resume logic, disk-space checks, verification, unsafe drive removal, install logs.
+
+### Critical risks in the current concept
+
+1. **“Folder name as game ID” is fragile.**
+   It is usable for v1, but it creates collisions when two different games or two variants share the same folder name. The PRD mitigates this with a local `variant_key` and `is_primary` flag while still honoring your requirement that the visible game ID derives from the folder name.
+
+2. **“Folder presence only” drive detection is simple but weak.**
+   A random drive with `GameHubDrive` will be treated as compatible. The app should still use folder presence as the detection rule, but `drive.json` should validate schema version and folder structure after detection.
+
+3. **Emulator support can become complex quickly.**
+   PC games can be copied and launched directly. Emulator games require an emulator executable, ROM path, arguments, working directory, and sometimes BIOS/config files. v1 should support emulator launch profiles, but not attempt full emulator management.
+
+4. **Install reliability is the core product risk.**
+   The app is 80% installer. If copying, resuming, verification, and progress reporting are unreliable, the app fails even if the UI looks good.
+
+---
+
+# 1. Product summary
+
+## 1.1 Product name
+
+**GameHubDrive Manager**
+
+Working internal package name:
+
+```text
+gamehub_manager
+```
+
+External drive library root:
+
+```text
+GameHubDrive
+```
+
+Windows example:
+
+```text
+E:\GameHubDrive\
+```
+
+## 1.2 Product definition
+
+GameHubDrive Manager is a **Windows-first portable desktop application** written in Python with a rich PySide6 GUI. It acts primarily as a **game installer** for games stored on removable drives, with secondary launcher functionality.
+
+The app automatically detects external drives containing a structured `GameHubDrive` folder, scans game manifests, shows the drive and local installed libraries, installs selected games to a user-chosen local folder, creates shortcuts, verifies installs, tracks launch/playtime, and allows launching installed games without requiring the source drive.
+
+## 1.3 Product positioning
+
+The app is not a full Steam replacement. It is closer to:
+
+```text
+Wii Backup Manager-style game library organizer
++
+offline-first external-drive installer
++
+lightweight launcher
+```
+
+## 1.4 Primary use case
+
+A user has games organized on flash drives, external HDDs, or external SSDs. They insert a drive. The app detects it, displays compatible games, lets the user install selected games to the PC, verifies the copy, creates shortcuts, and launches installed games locally.
+
+---
+
+# 2. Goals and non-goals
+
+## 2.1 v1 goals
+
+| ID    | Goal                                                                    | Priority |
+| ----- | ----------------------------------------------------------------------- | -------- |
+| G-001 | Detect drives containing `GameHubDrive` automatically                   | P0       |
+| G-002 | Initialize a drive if `GameHubDrive` is missing                         | P0       |
+| G-003 | Scan structured PC games and emulator games                             | P0       |
+| G-004 | Require `game.json` for valid games                                     | P0       |
+| G-005 | Show games even when metadata is incomplete                             | P0       |
+| G-006 | Let user choose local install directory                                 | P0       |
+| G-007 | Install games by copying files to the PC                                | P0       |
+| G-008 | Resume interrupted installs                                             | P0       |
+| G-009 | Check free disk space before install                                    | P0       |
+| G-010 | Show background install progress, speed, ETA, current file, total files | P0       |
+| G-011 | Verify installs using file count and total size                         | P0       |
+| G-012 | Create Windows shortcuts after install                                  | P0       |
+| G-013 | Launch installed local copies                                           | P0       |
+| G-014 | Allow launch-from-drive only as a test/developer option                 | P1       |
+| G-015 | Track playtime, last played, process exit                               | P0       |
+| G-016 | Keep installed games visible and launchable after drive removal         | P0       |
+| G-017 | Store local state in SQLite under `%APPDATA%`                           | P0       |
+| G-018 | Use a PySide6 rich desktop UI                                           | P0       |
+| G-019 | Show drive capacity, local capacity, install status                     | P0       |
+| G-020 | Support offline-first cover art and metadata from local files           | P0       |
+
+## 2.2 Explicit non-goals for v1
+
+| ID     | Non-goal                                                                        |
+| ------ | ------------------------------------------------------------------------------- |
+| NG-001 | No DRM, account system, cloud saves, storefront, payments, multiplayer services |
+| NG-002 | No real installer execution such as `setup.exe` install workflows               |
+| NG-003 | No registry installation behavior                                               |
+| NG-004 | No dependency/runtime installation management                                   |
+| NG-005 | No mandatory online metadata/art scraping                                       |
+| NG-006 | No executable security warning before launch                                    |
+| NG-007 | No automatic deletion from external drives                                      |
+| NG-008 | No Linux/macOS support in v1                                                    |
+| NG-009 | No archive/ISO installation in v1; reserve for later                            |
+| NG-010 | No emulator BIOS management in v1                                               |
+
+---
+
+# 3. Target platform and technology
+
+## 3.1 Platform
+
+```text
+Windows 10/11 first
+```
+
+## 3.2 Language
+
+```text
+Python 3.11+
+```
+
+## 3.3 GUI toolkit
+
+```text
+PySide6
+```
+
+## 3.4 Packaging target
+
+The app must be packageable as a Windows executable using PyInstaller.
+
+Preferred v1 packaging:
+
+```text
+GameHubDriveManager.exe
+```
+
+Acceptable during development:
+
+```text
+python -m gamehub_manager
+```
+
+## 3.5 Local app data location
+
+Use `%APPDATA%`, not the executable folder.
+
+Example:
+
+```text
+%APPDATA%\GameHubDriveManager\
+  config.json
+  gamehub.db
+  logs\
+  cache\
+  thumbnails\
+```
+
+## 3.6 Recommended dependencies
+
+| Dependency                   | Purpose                              | Required |
+| ---------------------------- | ------------------------------------ | -------- |
+| PySide6                      | GUI                                  | Yes      |
+| psutil                       | Process/playtime tracking, disk info | Yes      |
+| pywin32                      | Windows shortcut creation            | Yes      |
+| pydantic or dataclasses-json | Manifest validation                  | Optional |
+| pytest                       | Tests                                | Dev only |
+
+---
+
+# 4. Product behavior overview
+
+## 4.1 Core flow
+
+```text
+User opens app
+→ app scans Windows drive roots
+→ detects drives containing \GameHubDrive\
+→ validates folder layout
+→ scans game manifests
+→ merges drive games with installed local library
+→ displays games in UI
+→ user selects game
+→ user installs to local folder
+→ app copies files in background
+→ app resumes if interrupted
+→ app verifies file count and total size
+→ app creates shortcut
+→ app marks game installed
+→ user launches installed game
+→ app tracks playtime and last played
+```
+
+## 4.2 Main product rule
+
+The app should prefer **installed local copies**.
+
+Launch-from-drive exists only for test/developer usage and should not be the default user path.
+
+---
+
+# 5. Drive structure specification
+
+## 5.1 Drive detection rule
+
+A compatible drive is any mounted Windows volume root containing:
+
+```text
+<GameHubDriveRoot>\GameHubDrive\
+```
+
+Example:
+
+```text
+E:\GameHubDrive\
+F:\GameHubDrive\
+```
+
+Detection must be automatic.
+
+The app should scan available drives at launch and periodically while open.
+
+Recommended polling interval:
+
+```text
+3 seconds
+```
+
+Windows device event APIs may be added later, but v1 can use polling for reliability and implementation speed.
+
+## 5.2 Drive initialization rule
+
+If a removable or external drive does not contain `GameHubDrive`, the UI must offer:
+
+```text
+Initialize Drive
+```
+
+This action creates:
+
+```text
+X:\GameHubDrive\
+X:\GameHubDrive\drive.json
+X:\GameHubDrive\games\
+X:\GameHubDrive\games\PC Games\
+X:\GameHubDrive\games\Emulators\
+X:\GameHubDrive\_imports\
+X:\GameHubDrive\_logs\
+```
+
+The action must not format, erase, or reorganize the drive.
+
+## 5.3 `drive.json`
+
+Even though drive detection is based on folder presence, `drive.json` should exist for schema validation.
+
+No generated drive ID is required.
+
+Example:
+
+```json
+{
+  "schema_version": 1,
+  "library_name": "GameHubDrive",
+  "created_by": "GameHubDrive Manager",
+  "notes": "",
+  "folders": {
+    "games": "games",
+    "pc_games": "games/PC Games",
+    "emulators": "games/Emulators"
+  }
+}
+```
+
+## 5.4 Required root structure
+
+```text
+GameHubDrive/
+  drive.json
+  games/
+    PC Games/
+      <Game Title>/
+        game.json
+        cover.jpg
+        <game executable and files>
+        data/
+        saves/
+    Emulators/
+      <Emulator Name>/
+        emulator.json
+        <emulator files if portable>
+        <Game Name>/
+          game.json
+          cover.jpg
+          rom.extension
+  _imports/
+  _logs/
+```
+
+## 5.5 PC game folder rule
+
+Each PC game is self-contained.
+
+Example:
+
+```text
+GameHubDrive/
+  games/
+    PC Games/
+      Hollow Knight/
+        game.json
+        cover.jpg
+        Hollow Knight.exe
+        hollow_knight_Data/
+        saves/
+```
+
+The app must not require all games to use a `files/` subfolder. Real PC games often have their own native folder structure, so the game folder itself is the source payload.
+
+## 5.6 Emulator game folder rule
+
+Each emulator has an emulator folder.
+
+Example:
+
+```text
+GameHubDrive/
+  games/
+    Emulators/
+      Dolphin/
+        emulator.json
+        Dolphin.exe
+        User/
+        Super Mario Galaxy/
+          game.json
+          cover.jpg
+          Super Mario Galaxy.iso
+```
+
+The app must support emulator games as launch profiles.
+
+For emulator games, `game.json` references the ROM file and the parent emulator profile.
+
+---
+
+# 6. Manifest specification
+
+## 6.1 Every game requires `game.json`
+
+A folder without `game.json` is not a fully configured game.
+
+However, incomplete or invalid games should still appear in the UI as:
+
+```text
+Needs setup
+```
+
+They should not be silently hidden.
+
+## 6.2 Game ID rule
+
+The primary `id` is derived from the game folder name.
+
+Example:
+
+```text
+Folder: Hollow Knight
+id: hollow-knight
+```
+
+Normalization rule:
+
+```text
+lowercase
+trim whitespace
+replace spaces with hyphens
+remove unsupported filename/id characters
+```
+
+Because folder-name IDs can collide, the local database must also store:
+
+```text
+variant_key
+source_relative_path
+source_drive_root_last_seen
+is_primary
+```
+
+## 6.3 PC game manifest
+
+Example:
+
+```json
+{
+  "schema_version": 1,
+  "id": "hollow-knight",
+  "title": "Hollow Knight",
+  "game_type": "pc",
+  "genre": "Metroidvania",
+  "version": "1.0",
+  "executable_path": "Hollow Knight.exe",
+  "launch_args": "",
+  "working_directory": ".",
+  "cover_image": "cover.jpg",
+  "save_path": "saves",
+  "shortcut": {
+    "create_desktop_shortcut": true,
+    "create_start_menu_shortcut": false
+  }
+}
+```
+
+## 6.4 Emulator profile manifest
+
+Example:
+
+```json
+{
+  "schema_version": 1,
+  "emulator_id": "dolphin",
+  "name": "Dolphin",
+  "executable_path": "Dolphin.exe",
+  "default_launch_args": "--batch --exec \"{rom_path}\"",
+  "working_directory": "."
+}
+```
+
+## 6.5 Emulator game manifest
+
+Example:
+
+```json
+{
+  "schema_version": 1,
+  "id": "super-mario-galaxy",
+  "title": "Super Mario Galaxy",
+  "game_type": "emulated",
+  "genre": "Platformer",
+  "version": "1.0",
+  "emulator_id": "dolphin",
+  "rom_path": "Super Mario Galaxy.iso",
+  "launch_args": "",
+  "cover_image": "cover.jpg",
+  "save_path": "../User"
+}
+```
+
+## 6.6 Metadata rules
+
+| Field               |      Required | Behavior if missing     |
+| ------------------- | ------------: | ----------------------- |
+| `schema_version`    |           Yes | Mark as invalid         |
+| `id`                |            No | Derive from folder name |
+| `title`             |            No | Use folder name         |
+| `game_type`         |           Yes | Mark as needs setup     |
+| `genre`             |            No | Empty/free text         |
+| `version`           |            No | Empty                   |
+| `executable_path`   |       PC only | Mark as not launchable  |
+| `rom_path`          | Emulator only | Mark as not launchable  |
+| `cover_image`       |            No | Use placeholder         |
+| `save_path`         |            No | Empty                   |
+| `launch_args`       |            No | Empty                   |
+| `working_directory` |            No | Executable folder       |
+
+---
+
+# 7. Local installation behavior
+
+## 7.1 First-launch install directory
+
+On first launch, the app must prompt for a local install directory.
+
+Example default suggestion:
+
+```text
+C:\Users\<User>\Games\GameHub\
+```
+
+The user must be able to choose another drive or folder.
+
+The chosen path is stored in:
+
+```text
+%APPDATA%\GameHubDriveManager\config.json
+```
+
+## 7.2 Local installed library structure
+
+Example:
+
+```text
+<LocalInstallRoot>\
+  PC Games\
+    Hollow Knight\
+      game.json
+      cover.jpg
+      Hollow Knight.exe
+      hollow_knight_Data\
+      saves\
+  Emulators\
+    Dolphin\
+      Dolphin.exe
+      User\
+      Super Mario Galaxy\
+        game.json
+        cover.jpg
+        Super Mario Galaxy.iso
+```
+
+## 7.3 Install rule
+
+Installing a game means:
+
+```text
+copy source game folder from external drive
+to local install root
+preserve relative folder structure
+copy bundled saves if present
+create shortcut
+record installation in SQLite
+verify file count and total size
+```
+
+## 7.4 Install source and destination
+
+For PC games:
+
+```text
+Source:
+E:\GameHubDrive\games\PC Games\Hollow Knight\
+
+Destination:
+D:\Games\GameHub\PC Games\Hollow Knight\
+```
+
+For emulator games:
+
+```text
+Source:
+E:\GameHubDrive\games\Emulators\Dolphin\Super Mario Galaxy\
+
+Destination:
+D:\Games\GameHub\Emulators\Dolphin\Super Mario Galaxy\
+```
+
+Important: emulator executable handling must be explicit. If the emulator itself is needed locally, v1 should either:
+
+1. copy the full emulator folder, or
+2. require the emulator to already exist locally.
+
+Recommended v1 rule:
+
+```text
+When installing an emulator game, copy the specific game folder.
+If emulator.json says "install_emulator_with_games": true, also copy the emulator executable/support files.
+```
+
+## 7.5 Copy behavior
+
+The installer must:
+
+* run in a background worker
+* preserve directory structure
+* preserve file names
+* skip existing files only if file size matches
+* overwrite only with explicit user confirmation
+* support resume
+* show copy progress
+* log errors
+* detect insufficient space before copy
+* tolerate another game running during install
+
+## 7.6 Verification behavior
+
+MVP verification method:
+
+```text
+file count + total byte size
+```
+
+The app must compare:
+
+```text
+source_file_count == destination_file_count
+source_total_size == destination_total_size
+```
+
+If verification fails:
+
+```text
+install status = incomplete
+launch disabled unless user explicitly overrides in developer mode
+repair install button enabled
+```
+
+## 7.7 Resume behavior
+
+The app must persist install state in SQLite.
+
+On interrupted install:
+
+```text
+status = incomplete
+copied_file_count saved
+copied_bytes saved
+destination path saved
+source path saved
+```
+
+On resume:
+
+```text
+walk source tree
+for each source file:
+  if destination exists and size matches, skip
+  else copy/re-copy
+then verify
+```
+
+## 7.8 Unsafe drive removal during install
+
+If the drive disappears during copy:
+
+```text
+pause/fail job
+mark install incomplete
+retain partial destination
+show "Source drive removed"
+allow resume when drive is reconnected
+do not delete partial files automatically
+```
+
+## 7.9 Shortcut creation
+
+After successful install, create shortcuts based on manifest settings.
+
+Default v1 behavior:
+
+```text
+Desktop shortcut: yes
+Start Menu shortcut: optional, default no
+```
+
+Shortcut target:
+
+```text
+installed executable path
+```
+
+Shortcut working directory:
+
+```text
+installed working directory
+```
+
+Shortcut arguments:
+
+```text
+launch_args
+```
+
+---
+
+# 8. Launch behavior
+
+## 8.1 Default launch rule
+
+Default user launch must use the installed local copy.
+
+```text
+Installed → Launch button enabled
+Not installed → Show "Not installed"; Install button primary
+```
+
+## 8.2 Launch-from-drive
+
+Launch-from-drive must exist only as a test/developer action.
+
+UI placement:
+
+```text
+Right-click game → Developer → Launch from drive
+```
+
+or:
+
+```text
+Game Info panel → Advanced/Test Launch
+```
+
+This action should be disabled or hidden by default unless developer mode is enabled.
+
+## 8.3 Launch tracking
+
+The app must track:
+
+```text
+launch_count
+last_played_at
+session_start
+session_end
+session_duration_seconds
+total_playtime_seconds
+```
+
+## 8.4 Process tracking
+
+Use `psutil`.
+
+Tracking rule:
+
+```text
+Start timer when process starts.
+Continue while root process or known child processes are alive.
+Stop timer when root and children exit.
+```
+
+Limitations must be logged when launchers detach child processes in ways the app cannot track.
+
+## 8.5 Working directory
+
+Default:
+
+```text
+directory containing the executable
+```
+
+If manifest defines `working_directory`, use that instead.
+
+## 8.6 Compatibility options
+
+Manifest and UI should support:
+
+```json
+{
+  "run_as_admin": false,
+  "working_directory": ".",
+  "launch_args": "",
+  "environment": {}
+}
+```
+
+`run_as_admin` can be stored in v1, but implementation may be deferred if it complicates packaging.
+
+## 8.7 Emulator launch
+
+For emulator games:
+
+```text
+resolve emulator executable
+resolve ROM path
+build command using emulator profile
+launch emulator with ROM argument
+track emulator process
+```
+
+Example command template:
+
+```text
+Dolphin.exe --batch --exec "Super Mario Galaxy.iso"
+```
+
+---
+
+# 9. Save handling
+
+## 9.1 v1 save rules
+
+The app must support save paths in metadata.
+
+The app should copy bundled saves during install when safe.
+
+Default policy:
+
+```text
+Never overwrite existing local saves without confirmation.
+```
+
+## 9.2 Relative save paths
+
+If `save_path` is relative:
+
+```text
+save_path = "saves"
+```
+
+Then target is:
+
+```text
+<InstalledGameFolder>\saves\
+```
+
+## 9.3 Windows user-folder save paths
+
+The app must support expanded Windows save paths:
+
+```text
+%APPDATA%
+%LOCALAPPDATA%
+%USERPROFILE%\Documents\My Games
+%USERPROFILE%\Saved Games
+```
+
+For v1, support means:
+
+```text
+store path
+expand path
+display path
+optionally open folder
+copy bundled saves only after explicit confirmation
+```
+
+Do not silently overwrite files in Windows user folders.
+
+---
+
+# 10. SQLite database specification
+
+## 10.1 Database file
+
+```text
+%APPDATA%\GameHubDriveManager\gamehub.db
+```
+
+## 10.2 Tables
+
+### `settings`
+
+```sql
+CREATE TABLE settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+```
+
+### `games`
+
+Represents known games from drives and local installs.
+
+```sql
+CREATE TABLE games (
+  id TEXT NOT NULL,
+  variant_key TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  game_type TEXT NOT NULL,
+  genre TEXT,
+  version TEXT,
+  source_type TEXT NOT NULL,
+  source_relative_path TEXT,
+  source_drive_root_last_seen TEXT,
+  manifest_path_last_seen TEXT,
+  cover_image_path TEXT,
+  is_primary INTEGER NOT NULL DEFAULT 0,
+  metadata_status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+```
+
+### `installations`
+
+```sql
+CREATE TABLE installations (
+  installation_id TEXT PRIMARY KEY,
+  variant_key TEXT NOT NULL,
+  local_path TEXT NOT NULL,
+  executable_path TEXT,
+  installed_at TEXT,
+  install_status TEXT NOT NULL,
+  source_file_count INTEGER,
+  source_total_size INTEGER,
+  dest_file_count INTEGER,
+  dest_total_size INTEGER,
+  shortcut_desktop_path TEXT,
+  shortcut_start_menu_path TEXT,
+  FOREIGN KEY (variant_key) REFERENCES games(variant_key)
+);
+```
+
+### `install_jobs`
+
+```sql
+CREATE TABLE install_jobs (
+  job_id TEXT PRIMARY KEY,
+  variant_key TEXT NOT NULL,
+  source_path TEXT NOT NULL,
+  destination_path TEXT NOT NULL,
+  status TEXT NOT NULL,
+  copied_files INTEGER NOT NULL DEFAULT 0,
+  total_files INTEGER NOT NULL DEFAULT 0,
+  copied_bytes INTEGER NOT NULL DEFAULT 0,
+  total_bytes INTEGER NOT NULL DEFAULT 0,
+  current_file TEXT,
+  error_message TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+```
+
+### `launch_sessions`
+
+```sql
+CREATE TABLE launch_sessions (
+  session_id TEXT PRIMARY KEY,
+  variant_key TEXT NOT NULL,
+  installation_id TEXT,
+  launched_from TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  ended_at TEXT,
+  duration_seconds INTEGER DEFAULT 0,
+  exit_code INTEGER,
+  FOREIGN KEY (variant_key) REFERENCES games(variant_key)
+);
+```
+
+### `playtime`
+
+```sql
+CREATE TABLE playtime (
+  variant_key TEXT PRIMARY KEY,
+  launch_count INTEGER NOT NULL DEFAULT 0,
+  total_seconds INTEGER NOT NULL DEFAULT 0,
+  last_played_at TEXT
+);
+```
+
+## 10.3 Local installed games without drive
+
+Installed games must remain visible when the source drive is disconnected.
+
+State example:
+
+```text
+source drive: unavailable
+install status: installed
+launch status: available
+```
+
+---
+
+# 11. UI/UX requirements
+
+## 11.1 UI style
+
+Use a rich PySide6 desktop interface inspired by the provided mockup and Wii Backup Manager-style table workflows.
+
+The app should have:
+
+```text
+Top title/menu area
+Left navigation/library pane
+Central game table
+Bottom install/job information panel
+Right game detail panel
+```
+
+## 11.2 Main layout
+
+```text
++----------------------------------------------------------+
+| GameHubDrive Manager v1.0                               |
++-------------+-----------------------------+--------------+
+| Library     | Game table / grid           | Game info    |
+|             |                             |              |
+| Drives      | Title | Type | Status ...   | Cover        |
+| Installed   |                             | Metadata     |
+| All Games   +-----------------------------+ Actions      |
+|             | Install queue / progress    |              |
++-------------+-----------------------------+--------------+
+```
+
+## 11.3 Left pane
+
+Must show:
+
+```text
+All Games
+Installed Library
+Detected Drives
+Disconnected Sources
+Needs Setup
+Install Queue
+```
+
+Detected drive example:
+
+```text
+E:\ GameHubDrive
+F:\ GameHubDrive
+```
+
+## 11.4 Main table columns
+
+Required v1 columns:
+
+```text
+Title
+Type
+Genre
+Source
+Installed
+Install Status
+Size
+Playtime
+Last Played
+Drive Status
+```
+
+## 11.5 Right info panel
+
+When a game is selected, show:
+
+```text
+Cover image
+Title
+Game type
+Genre
+Version
+Install status
+Source path
+Local install path
+Executable path
+Save path
+Playtime
+Last played
+Buttons:
+  Install
+  Launch
+  Uninstall
+  Repair
+  Verify
+  Edit Metadata
+  Open Source Folder
+  Open Install Folder
+```
+
+## 11.6 Bottom install info panel
+
+Must show active and recent jobs:
+
+```text
+Game
+Status
+Current file
+Copied files / total files
+Copied size / total size
+Speed
+ETA
+Errors
+Pause/Cancel/Resume
+```
+
+## 11.7 Status labels
+
+Use clear labels:
+
+```text
+Installed
+Not installed
+Installing
+Incomplete
+Needs setup
+Source unavailable
+Ready to launch
+Drive test launch available
+```
+
+## 11.8 Search/filtering
+
+v1 must support:
+
+```text
+search by title
+filter by installed/not installed
+filter by drive
+filter by type
+filter by genre
+filter by needs setup
+```
+
+## 11.9 Capacity display
+
+The UI must show:
+
+```text
+external drive total/free space
+local install drive total/free space
+required install size
+available space check result
+```
+
+---
+
+# 12. Functional requirements
+
+## 12.1 Drive detection
+
+| ID     | Requirement                                             | Acceptance criteria                                                  |
+| ------ | ------------------------------------------------------- | -------------------------------------------------------------------- |
+| FR-001 | Detect mounted Windows drives containing `GameHubDrive` | Insert compatible drive; app lists it within polling interval        |
+| FR-002 | Prompt initialization if drive lacks folder             | Select non-compatible drive; app offers Initialize Drive             |
+| FR-003 | Handle drive-letter changes                             | Reinsert drive with different letter; app scans it as available      |
+| FR-004 | Handle drive removal                                    | Remove drive; drive games become source unavailable unless installed |
+
+## 12.2 Scanning
+
+| ID     | Requirement                              | Acceptance criteria                           |
+| ------ | ---------------------------------------- | --------------------------------------------- |
+| FR-010 | Scan PC game folders                     | PC games under `games/PC Games` appear        |
+| FR-011 | Scan emulator folders                    | Emulator games under `games/Emulators` appear |
+| FR-012 | Require `game.json` for configured games | Missing manifest appears as Needs setup       |
+| FR-013 | Missing cover uses placeholder           | UI remains stable                             |
+| FR-014 | Invalid executable path disables launch  | Game visible, marked not launchable           |
+
+## 12.3 Installation
+
+| ID     | Requirement                     | Acceptance criteria                                      |
+| ------ | ------------------------------- | -------------------------------------------------------- |
+| FR-020 | User chooses install root       | First launch prompts directory                           |
+| FR-021 | Copy game to local install root | Destination contains expected files                      |
+| FR-022 | Background install              | UI remains responsive                                    |
+| FR-023 | Progress display                | Shows total progress, speed, ETA, current file           |
+| FR-024 | Disk space check                | Install blocked if insufficient space                    |
+| FR-025 | Resume install                  | Interrupted install resumes without restarting full copy |
+| FR-026 | Verify by count and size        | Installed status only after verification passes          |
+| FR-027 | Create shortcut                 | Shortcut launches installed game                         |
+| FR-028 | Mark incomplete on failure      | Failed install is visible and repairable                 |
+
+## 12.4 Launching
+
+| ID     | Requirement                  | Acceptance criteria                          |
+| ------ | ---------------------------- | -------------------------------------------- |
+| FR-030 | Launch installed game        | Launch button starts local executable        |
+| FR-031 | Track playtime               | Session adds duration to total               |
+| FR-032 | Track last played            | Last played updates after launch             |
+| FR-033 | Detect process exit          | Session closes after process exits           |
+| FR-034 | Support emulator launch args | Emulator game opens ROM through emulator     |
+| FR-035 | Test launch from drive       | Available only under advanced/developer path |
+
+## 12.5 Local library
+
+| ID     | Requirement                              | Acceptance criteria                                      |
+| ------ | ---------------------------------------- | -------------------------------------------------------- |
+| FR-040 | Installed games remain visible offline   | Remove source drive; installed game still launches       |
+| FR-041 | Uninstall local copy                     | Removes local install after confirmation                 |
+| FR-042 | Never delete drive copy during uninstall | External files remain untouched                          |
+| FR-043 | Repair install                           | Recopy missing/mismatched files from source if available |
+
+---
+
+# 13. Architecture requirements
+
+## 13.1 Suggested package structure
+
+```text
+gamehub_manager/
+  __init__.py
+  main.py
+  app.py
+
+  core/
+    models.py
+    manifest.py
+    paths.py
+    constants.py
+    errors.py
+
+  drives/
+    detector.py
+    scanner.py
+    initializer.py
+
+  library/
+    indexer.py
+    resolver.py
+    duplicates.py
+
+  install/
+    planner.py
+    copier.py
+    verifier.py
+    jobs.py
+    shortcuts.py
+
+  launch/
+    launcher.py
+    process_tracker.py
+    emulator.py
+
+  db/
+    database.py
+    migrations.py
+    repositories.py
+
+  ui/
+    main_window.py
+    left_pane.py
+    game_table.py
+    game_details.py
+    install_panel.py
+    dialogs.py
+
+  tests/
+    test_manifest.py
+    test_scanner.py
+    test_installer.py
+    test_verifier.py
+```
+
+## 13.2 Layering rule
+
+The UI must not directly perform file copies, database writes, or process tracking.
+
+Use this dependency direction:
+
+```text
+UI → services → core/domain → storage/filesystem
+```
+
+## 13.3 Background job rule
+
+Long operations must not run on the main Qt thread.
+
+Background operations:
+
+```text
+drive scan
+install copy
+verification
+thumbnail loading
+process tracking
+```
+
+## 13.4 Logging
+
+Log files:
+
+```text
+%APPDATA%\GameHubDriveManager\logs\app.log
+%APPDATA%\GameHubDriveManager\logs\install.log
+%APPDATA%\GameHubDriveManager\logs\launch.log
+```
+
+Logs must include:
+
+```text
+timestamp
+operation
+game id
+variant key
+source path
+destination path
+error message
+stack trace if unexpected
+```
+
+---
+
+# 14. AI agent implementation directives
+
+## 14.1 General rules for Codex/AI coding agent
+
+The coding agent must:
+
+1. Implement the product in milestones.
+2. Keep file operations conservative.
+3. Never delete files from external drives.
+4. Keep UI responsive.
+5. Add tests for file-copy and manifest behavior.
+6. Prefer explicit errors over silent failure.
+7. Use type hints for new code.
+8. Keep platform-specific Windows logic isolated.
+9. Avoid real installer execution in v1.
+10. Do not add online scraping unless explicitly requested later.
+
+## 14.2 Implementation order
+
+### Milestone 1 — Project skeleton
+
+Deliver:
+
+```text
+PySide6 app boots
+config folder created under %APPDATA%
+SQLite database initialized
+main window layout exists
+```
+
+Acceptance:
+
+```text
+python -m gamehub_manager opens window
+no crash on missing config/db
+```
+
+### Milestone 2 — Drive initialization and detection
+
+Deliver:
+
+```text
+detect GameHubDrive folders
+show drives in left pane
+initialize selected drive
+create drive.json and folders
+```
+
+Acceptance:
+
+```text
+insert drive with GameHubDrive → appears
+drive without folder → Initialize Drive creates structure
+```
+
+### Milestone 3 — Manifest scanner
+
+Deliver:
+
+```text
+scan PC Games
+scan Emulators
+parse game.json
+show invalid/missing manifests as Needs setup
+```
+
+Acceptance:
+
+```text
+sample drive structure loads into table
+missing cover uses placeholder
+bad executable path marks not launchable
+```
+
+### Milestone 4 — Local SQLite library
+
+Deliver:
+
+```text
+persist scanned games
+persist installed games
+merge drive and local states
+show installed games without source drive
+```
+
+Acceptance:
+
+```text
+install state survives app restart
+remove drive → installed game remains
+```
+
+### Milestone 5 — Installer
+
+Deliver:
+
+```text
+choose local install root
+copy game folders
+background copy
+progress UI
+space check
+resume partial installs
+verify file count + total size
+```
+
+Acceptance:
+
+```text
+large test folder installs without UI freeze
+interrupted install resumes
+insufficient space blocks install
+verification passes/fails correctly
+```
+
+### Milestone 6 — Shortcut creation
+
+Deliver:
+
+```text
+desktop shortcut
+optional Start Menu shortcut
+shortcut launches installed executable
+```
+
+Acceptance:
+
+```text
+shortcut opens installed local copy
+shortcut uses correct working directory and args
+```
+
+### Milestone 7 — Launcher and playtime
+
+Deliver:
+
+```text
+launch installed PC game
+launch emulator profile
+track process and child processes
+store playtime and last played
+```
+
+Acceptance:
+
+```text
+launch session creates DB row
+playtime increases
+last played updates
+```
+
+### Milestone 8 — UI polish and filters
+
+Deliver:
+
+```text
+search
+filters
+drive capacity
+local capacity
+install queue panel
+game detail panel
+edit metadata dialog
+```
+
+Acceptance:
+
+```text
+user can manage library through GUI without editing JSON manually
+```
+
+### Milestone 9 — Packaging
+
+Deliver:
+
+```text
+PyInstaller build
+portable executable distribution
+clean first-run behavior
+```
+
+Acceptance:
+
+```text
+fresh Windows machine can run packaged app
+app creates %APPDATA% config/db
+```
+
+---
+
+# 15. Validation and test plan
+
+## 15.1 Required test fixtures
+
+Create fake drive structures in temporary folders.
+
+Example:
+
+```text
+tests/fixtures/fake_drive/GameHubDrive/
+```
+
+Test cases:
+
+```text
+valid PC game
+missing game.json
+invalid executable path
+missing cover
+valid emulator game
+duplicate folder-name game
+partial install
+interrupted install
+```
+
+## 15.2 Unit tests
+
+Required tests:
+
+```text
+manifest parsing
+folder-name ID normalization
+drive detection
+drive initialization
+PC game scanning
+emulator game scanning
+install planning
+file count/size verification
+resume skip logic
+SQLite repository operations
+```
+
+## 15.3 Integration tests
+
+Required tests:
+
+```text
+scan fake drive → games in DB
+install fake game → local folder created
+remove fake drive → installed game still visible
+resume partial install → verification passes
+```
+
+## 15.4 Manual Windows tests
+
+Required before v1 release:
+
+```text
+USB flash drive test
+external HDD/SSD test
+drive-letter change test
+unsafe removal during scan
+unsafe removal during install
+large game copy test
+shortcut launch test
+emulator launch test
+```
+
+---
+
+# 16. Acceptance criteria for v1.0
+
+v1.0 is successful only if all of the following work:
+
+1. App launches as a Windows executable.
+2. App stores config and DB in `%APPDATA%`.
+3. App detects `GameHubDrive` folders automatically.
+4. App can initialize a drive.
+5. App scans PC and emulator game folders.
+6. App displays incomplete games instead of hiding them.
+7. App lets user choose local install path.
+8. App installs by copying files locally.
+9. App shows background install progress with speed and ETA.
+10. App resumes interrupted installs.
+11. App checks available disk space before install.
+12. App verifies install with file count and total byte size.
+13. App creates a Windows shortcut.
+14. App launches installed games.
+15. App tracks playtime and last played.
+16. App keeps installed games visible after drive removal.
+17. App never deletes external-drive files automatically.
+
+---
+
+# 17. Residual risks
+
+| Risk                                                     | Severity | Mitigation                                           |
+| -------------------------------------------------------- | -------: | ---------------------------------------------------- |
+| Folder-name IDs collide                                  |     High | Use `variant_key` and `is_primary` locally           |
+| Emulator workflows vary heavily                          |     High | Support launch profiles only in v1                   |
+| Detached launcher processes may break playtime tracking  |   Medium | Best-effort child process tracking; log limitations  |
+| File count/size verification misses same-size corruption |   Medium | Accept for MVP; add hashes later                     |
+| Drive removal during install corrupts partial local copy |   Medium | Mark incomplete; resume/repair; do not auto-delete   |
+| PyInstaller packaging with PySide6 can be brittle        |   Medium | Add packaging milestone and clean build script early |
+| Shortcut creation depends on Windows APIs                |   Medium | Isolate shortcut service and test manually           |
+| Save copying can overwrite user data                     |     High | Never overwrite without confirmation                 |
+
+---
+
+# 18. Future roadmap
+
+## v1.1
+
+```text
+metadata editor improvements
+batch install queue
+better duplicate resolution UI
+hash-based verification option
+import wizard for existing folders
+```
+
+## v1.2
+
+```text
+online cover art lookup
+SteamGridDB/IGDB/RAWG integration
+cached metadata
+bulk cover assignment
+```
+
+## v1.3
+
+```text
+archive support: zip, 7z
+ISO handling
+compression-aware install planning
+```
+
+## v2.0
+
+```text
+plugin architecture
+advanced emulator profiles
+save backup/sync
+cross-platform support
+theme customization
+```
+
+---
+
+# Final synergy report
+
+## Feasibility analysis
+
+The project is feasible as a Windows-first Python/PySide6 desktop app. The MVP should focus on drive detection, structured scanning, reliable local copying, verification, shortcut creation, and launching. The core technical difficulty is not the launcher; it is reliable installation from removable storage.
+
+## Identified residual risks
+
+The main risks are ID collisions from folder-name IDs, emulator complexity, removable-drive instability during installs, and incomplete verification if using only count/size. These are acceptable for v1 if the app clearly tracks incomplete states and supports repair/resume.
+
+## Recommended next step
+
+Proceed to a technical design document or directly to implementation planning. The first concrete deliverable should be a minimal PySide6 prototype that detects `GameHubDrive`, initializes missing drive folders, scans `game.json`, and displays results in the main table.
