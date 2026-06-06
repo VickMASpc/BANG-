@@ -39,7 +39,15 @@ class AppPaths:
         self.thumbnails_dir.mkdir(parents=True, exist_ok=True)
         if not self.config_file.exists():
             self.config_file.write_text(
-                json.dumps({"schema_version": 1, "app_name": APP_NAME}, indent=2),
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "app_name": APP_NAME,
+                        "install_root": None,
+                        "developer_mode": False,
+                    },
+                    indent=2,
+                ),
                 encoding="utf-8",
             )
         self.database_file.touch(exist_ok=True)

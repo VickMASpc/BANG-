@@ -63,6 +63,11 @@ def parse_game_folder(
     genre = ""
     version = ""
     emulator_id: str | None = None
+    emulator_name: str | None = None
+    emulator_executable_path: str | None = None
+    emulator_working_directory: str | None = None
+    emulator_launch_args = ""
+    install_emulator_with_games = False
 
     if not manifest_path.exists():
         metadata_status = "needs_setup"
@@ -80,12 +85,17 @@ def parse_game_folder(
             game_type = str(manifest.get("game_type") or expected_type)
             genre = str(manifest.get("genre") or "")
             version = str(manifest.get("version") or "")
-            executable_path = manifest.get("executable_path")
-            rom_path = manifest.get("rom_path")
-            save_path = manifest.get("save_path")
-            working_directory = manifest.get("working_directory")
+            executable_path = _string_or_none(manifest.get("executable_path"))
+            rom_path = _string_or_none(manifest.get("rom_path"))
+            save_path = _string_or_none(manifest.get("save_path"))
+            working_directory = _string_or_none(manifest.get("working_directory"))
             launch_args = str(manifest.get("launch_args") or "")
-            emulator_id = manifest.get("emulator_id")
+            emulator_id = _string_or_none(manifest.get("emulator_id"))
+            emulator_name = _string_or_none(manifest.get("emulator_name"))
+            emulator_executable_path = _string_or_none(manifest.get("emulator_executable_path"))
+            emulator_working_directory = _string_or_none(manifest.get("emulator_working_directory"))
+            emulator_launch_args = str(manifest.get("emulator_launch_args") or "")
+            install_emulator_with_games = bool(manifest.get("install_emulator_with_games") or False)
             if not manifest.get("schema_version") or not manifest.get("game_type"):
                 metadata_status = "needs_setup"
             cover_name = manifest.get("cover_image")
@@ -95,6 +105,7 @@ def parse_game_folder(
                     cover_image_path = str(candidate_cover)
             title_id = str(manifest.get("id") or normalize_game_id(title_fallback))
             id_value = normalize_game_id(title_id)
+            working_directory = _default_working_directory(working_directory, executable_path, emulator_executable_path)
             is_launchable = _resolve_launchable(game_folder, game_type, executable_path, rom_path)
             if not is_launchable and metadata_status == "ready":
                 notes = "Launch target is missing."
@@ -119,6 +130,11 @@ def parse_game_folder(
                 launch_args=launch_args,
                 size_bytes=compute_directory_size(game_folder),
                 emulator_id=emulator_id,
+                emulator_name=emulator_name,
+                emulator_executable_path=emulator_executable_path,
+                emulator_working_directory=emulator_working_directory,
+                emulator_launch_args=emulator_launch_args,
+                install_emulator_with_games=install_emulator_with_games,
                 notes=notes,
             )
 
@@ -143,8 +159,38 @@ def parse_game_folder(
         launch_args=launch_args,
         size_bytes=compute_directory_size(game_folder),
         emulator_id=emulator_id,
+        emulator_name=emulator_name,
+        emulator_executable_path=emulator_executable_path,
+        emulator_working_directory=emulator_working_directory,
+        emulator_launch_args=emulator_launch_args,
+        install_emulator_with_games=install_emulator_with_games,
         notes=notes,
     )
+
+
+def parse_emulator_profile(emulator_folder: Path) -> dict:
+    manifest_path = emulator_folder / "emulator.json"
+    if not manifest_path.exists():
+        return {}
+    try:
+        manifest = parse_json_file(manifest_path)
+    except ManifestError:
+        return {}
+    if not isinstance(manifest, dict):
+        return {}
+    return {
+        "schema_version": manifest.get("schema_version"),
+        "emulator_id": manifest.get("emulator_id"),
+        "name": manifest.get("name"),
+        "executable_path": manifest.get("executable_path"),
+        "default_launch_args": str(manifest.get("default_launch_args") or ""),
+        "working_directory": _default_working_directory(
+            _string_or_none(manifest.get("working_directory")),
+            _string_or_none(manifest.get("executable_path")),
+            None,
+        ),
+        "install_emulator_with_games": bool(manifest.get("install_emulator_with_games") or False),
+    }
 
 
 def _resolve_launchable(
@@ -158,3 +204,26 @@ def _resolve_launchable(
     if game_type == "emulated":
         return bool(rom_path and (game_folder / rom_path).exists())
     return False
+
+
+def _default_working_directory(
+    working_directory: str | None,
+    executable_path: str | None,
+    emulator_executable_path: str | None,
+) -> str | None:
+    if working_directory:
+        return working_directory
+    candidate = executable_path or emulator_executable_path
+    if not candidate:
+        return None
+    parent = Path(candidate).parent
+    if str(parent) in ("", "."):
+        return "."
+    return parent.as_posix()
+
+
+def _string_or_none(value) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None

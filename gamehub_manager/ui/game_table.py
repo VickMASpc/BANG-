@@ -44,11 +44,11 @@ class GameTable(QTableWidget):
                 game.get("genre", ""),
                 game.get("source_relative_path", ""),
                 "Yes" if game.get("local_path") else "No",
-                game.get("install_status") or "Not installed",
+                game.get("install_status_label") or game.get("install_status") or "Not installed",
                 self._format_size(game.get("size_bytes")),
                 self._format_playtime(game.get("total_seconds")),
                 game.get("last_played_at") or "",
-                "Connected" if game.get("source_drive_root_last_seen") else "Disconnected",
+                game.get("drive_status_label") or ("Connected" if game.get("source_drive_root_last_seen") else "Source unavailable"),
             ]
             for column_index, value in enumerate(values):
                 self.setItem(row_index, column_index, QTableWidgetItem(str(value)))

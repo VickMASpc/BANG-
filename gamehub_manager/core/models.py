@@ -11,6 +11,7 @@ class DriveRecord:
     drive_label: str
     available: bool
     validation_status: str
+    initializable: bool = False
     errors: tuple[str, ...] = field(default_factory=tuple)
 
 
@@ -37,4 +38,9 @@ class GameRecord:
     launch_args: str = ""
     size_bytes: int = 0
     emulator_id: str | None = None
+    emulator_name: str | None = None
+    emulator_executable_path: str | None = None
+    emulator_working_directory: str | None = None
+    emulator_launch_args: str = ""
+    install_emulator_with_games: bool = False
     notes: str = ""
